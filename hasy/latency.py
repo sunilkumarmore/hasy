@@ -99,15 +99,20 @@ class TurnMetrics:
             "OK " if self.within_budget else "OVER"
         ) if self.within_budget is not None else "??? "
 
-        logger.bind(hasy_latency=True).info(
-            f"⏱  turn {self.turn:>2} [{verdict}] "
-            f"vad={fmt(self.vad_endpoint_ms)} "
-            f"asr={fmt(self.asr_ms)} "
-            f"llm_ft={fmt(self.llm_first_token_ms)} "
-            f"tts_fc={fmt(self.tts_first_chunk_ms)} "
-            f"→ first_audio={fmt(self.total_to_first_audio_ms)} ms "
-            f"(budget {BUDGET_MS:.0f})"
-        )
+        # ASCII only: this runs mid-turn, and a UnicodeEncodeError on a cp1252
+        # Windows console would surface inside the TTS task.
+        try:
+            logger.bind(hasy_latency=True).info(
+                f"[HASY] turn {self.turn:>2} [{verdict}] "
+                f"vad={fmt(self.vad_endpoint_ms)} "
+                f"asr={fmt(self.asr_ms)} "
+                f"llm_ft={fmt(self.llm_first_token_ms)} "
+                f"tts_fc={fmt(self.tts_first_chunk_ms)} "
+                f"-> first_audio={fmt(self.total_to_first_audio_ms)} ms "
+                f"(budget {BUDGET_MS:.0f})"
+            )
+        except Exception:  # never let instrumentation break a conversation
+            pass
 
 
 def mark_vad_endpoint(client_uid: str) -> None:
@@ -146,7 +151,14 @@ def summary_table() -> str:
         row = []
         for attr, _, w in cols:
             v = getattr(m, attr)
-            row.append(f"{v:>{w}.1f}" if isinstance(v, float) else f"{'-':>{w}}")
+            if isinstance(v, bool) or v is None:
+                row.append(f"{'-':>{w}}")
+            elif isinstance(v, int):
+                row.append(f"{v:>{w}d}")
+            elif isinstance(v, float):
+                row.append(f"{v:>{w}.1f}")
+            else:
+                row.append(f"{'-':>{w}}")
         verdict = "-"
         if m.within_budget is not None:
             verdict = "OK" if m.within_budget else "OVER BUDGET"
@@ -261,11 +273,28 @@ def _patch_vad_endpoint() -> None:
     WebSocketHandler._handle_raw_audio_data = wrapper
 
 
+def _rebind(name: str, new_obj, modules) -> int:
+    """Rebind a module-level function everywhere it was imported.
+
+    `from x import f` copies the reference into the importing module's
+    namespace, so patching only the defining module leaves real call sites
+    still pointing at the original. Rebind every holder.
+    """
+    count = 0
+    for mod in modules:
+        if getattr(mod, name, None) is not None:
+            setattr(mod, name, new_obj)
+            count += 1
+    return count
+
+
 def _patch_turn_and_asr() -> None:
     """Open a metrics object per turn, and time the ASR call inside it."""
     try:
         from src.open_llm_vtuber.conversations import single_conversation as sc
         from src.open_llm_vtuber.conversations import conversation_utils as cu
+        from src.open_llm_vtuber.conversations import conversation_handler as ch
+        from src.open_llm_vtuber.conversations import group_conversation as gc
     except Exception as e:  # pragma: no cover
         logger.warning(f"HASY latency: cannot patch conversation ({e})")
         return
@@ -289,7 +318,9 @@ def _patch_turn_and_asr() -> None:
                 # Turn produced no audio (error, or text-only). Still report it.
                 m.log()
 
-    sc.process_single_conversation = turn_wrapper
+    # conversation_handler holds its own reference and is the real call site.
+    n = _rebind("process_single_conversation", turn_wrapper, (sc, ch))
+    logger.debug(f"HASY latency: turn wrapper bound in {n} module(s)")
 
     # ASR: time it, and capture the transcript for the report.
     original_asr = cu.process_user_input
@@ -308,9 +339,8 @@ def _patch_turn_and_asr() -> None:
             m.transcript = (text or "")[:120]
         return text
 
-    cu.process_user_input = asr_wrapper
-    # single_conversation imported the symbol directly, so rebind it there too.
-    sc.process_user_input = asr_wrapper
+    n = _rebind("process_user_input", asr_wrapper, (cu, sc, gc))
+    logger.debug(f"HASY latency: asr wrapper bound in {n} module(s)")
 
 
 def _patch_llm_first_token() -> None:
@@ -383,7 +413,10 @@ def _patch_tts_first_chunk() -> None:
 
     async def process_wrapper(self, *args, **kwargs):
         result = await original_put(self, *args, **kwargs)
-        record_first_audio()
+        try:
+            record_first_audio()
+        except Exception as e:  # instrumentation must never break audio
+            logger.debug(f"HASY latency: record_first_audio failed ({e})")
         return result
 
     TTSTaskManager._process_tts = process_wrapper
