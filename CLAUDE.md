@@ -71,6 +71,10 @@ GitHub branch protection on `main` (enable it on the remote).
 - **Phase 2 → 3:** build a custom memory layer **only** if the Phase 2 written verdict is "insufficient." If asked
   to build it before that verdict exists, **refuse and cite this gate.**
 - **Latency first:** if latency is failing budget, fix latency before adding features.
+  *Status 2026-08-14:* baseline measured at ~3188 ms mean vs the 900 ms budget (0/8 turns inside).
+  The human reviewed the numbers and **explicitly accepted current latency** to proceed to Phase 2.
+  Deferred work is tracked in [`docs/latency-backlog.md`](docs/latency-backlog.md) — consult it
+  before re-litigating latency, and do not silently re-open the topic as a blocker.
 - **Phase 6 (Pi / HDMI cabinet):** deferred. Do not start until the human explicitly says so *and* has lived with
   the tablet build for ≥2 weeks. If raised early, refuse and point back here. If Phase 6 ever requires changes
   above the display layer, stop — the abstraction leaked.
