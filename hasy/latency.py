@@ -70,6 +70,9 @@ class TurnMetrics:
     vad_endpoint_ms: Optional[float] = None
     asr_ms: Optional[float] = None
     llm_first_token_ms: Optional[float] = None
+    # First token -> first sentence handed to TTS. The agent buffers tokens
+    # until a sentence (or clause) boundary, so this is pure waiting.
+    sentence_wait_ms: Optional[float] = None
     tts_first_chunk_ms: Optional[float] = None
     total_to_first_audio_ms: Optional[float] = None
 
@@ -78,7 +81,10 @@ class TurnMetrics:
     # Internal reference points (perf_counter), not exported.
     _t_vad: Optional[float] = field(default=None, repr=False)
     _t_start: float = field(default_factory=time.perf_counter, repr=False)
+    _t_first_token: Optional[float] = field(default=None, repr=False)
     _first_audio_recorded: bool = field(default=False, repr=False)
+    _tts_submitted: bool = field(default=False, repr=False)
+    _tts_timed: bool = field(default=False, repr=False)
 
     @property
     def within_budget(self) -> Optional[bool]:
@@ -107,6 +113,7 @@ class TurnMetrics:
                 f"vad={fmt(self.vad_endpoint_ms)} "
                 f"asr={fmt(self.asr_ms)} "
                 f"llm_ft={fmt(self.llm_first_token_ms)} "
+                f"sent_wait={fmt(self.sentence_wait_ms)} "
                 f"tts_fc={fmt(self.tts_first_chunk_ms)} "
                 f"-> first_audio={fmt(self.total_to_first_audio_ms)} ms "
                 f"(budget {BUDGET_MS:.0f})"
@@ -141,6 +148,7 @@ def summary_table() -> str:
         ("vad_endpoint_ms", "vad", 8),
         ("asr_ms", "asr", 8),
         ("llm_first_token_ms", "llm_ft", 8),
+        ("sentence_wait_ms", "sent_wait", 9),
         ("tts_first_chunk_ms", "tts_fc", 8),
         ("total_to_first_audio_ms", "TOTAL", 9),
     ]
@@ -182,6 +190,7 @@ def summary_table() -> str:
             "vad_endpoint": "vad_endpoint_ms",
             "asr": "asr_ms",
             "llm_first_token": "llm_first_token_ms",
+            "sentence_wait": "sentence_wait_ms",
             "tts_first_chunk": "tts_first_chunk_ms",
         }
         means = {}
@@ -379,7 +388,9 @@ def _patch_llm_first_token() -> None:
                         if is_text:
                             seen = True
                             if m is not None and m.llm_first_token_ms is None:
-                                m.llm_first_token_ms = _ms(t0, time.perf_counter())
+                                now = time.perf_counter()
+                                m.llm_first_token_ms = _ms(t0, now)
+                                m._t_first_token = now
                     yield event
 
             return wrapper
@@ -395,11 +406,32 @@ def _patch_tts_first_chunk() -> None:
         logger.warning(f"HASY latency: cannot patch TTS ({e})")
         return
 
+    # When the first sentence is handed to TTS, the LLM has produced enough text
+    # to speak. The wait between first token and that moment is real latency and
+    # was previously invisible.
+    original_speak = TTSTaskManager.speak
+
+    async def speak_wrapper(self, *args, **kwargs):
+        m = _current_turn.get()
+        if m is not None and not m._tts_submitted:
+            m._tts_submitted = True  # claim synchronously, before any await
+            if m._t_first_token is not None:
+                m.sentence_wait_ms = _ms(m._t_first_token, time.perf_counter())
+        return await original_speak(self, *args, **kwargs)
+
+    TTSTaskManager.speak = speak_wrapper
+
     original_generate = TTSTaskManager._generate_audio
 
     async def generate_wrapper(self, tts_engine, text):
         m = _current_turn.get()
-        first = m is not None and m.tts_first_chunk_ms is None
+        # Claim the "first synthesis" slot synchronously. TTS tasks run in
+        # parallel, so checking `is None` after the await lets every concurrent
+        # task write, and the slowest one wins.
+        first = False
+        if m is not None and not m._tts_timed:
+            m._tts_timed = True
+            first = True
         t0 = time.perf_counter()
         result = await original_generate(self, tts_engine, text)
         if first:
@@ -408,13 +440,18 @@ def _patch_tts_first_chunk() -> None:
 
     TTSTaskManager._generate_audio = generate_wrapper
 
-    # First payload queued == first audio ready to leave the server.
+    # The client plays sequence 0 first, so that payload -- not whichever
+    # parallel task happens to finish first -- is the real first audio.
     original_put = TTSTaskManager._process_tts
 
     async def process_wrapper(self, *args, **kwargs):
         result = await original_put(self, *args, **kwargs)
         try:
-            record_first_audio()
+            seq = kwargs.get("sequence_number")
+            if seq is None and args:
+                seq = args[-1]
+            if seq == 0:
+                record_first_audio()
         except Exception as e:  # instrumentation must never break audio
             logger.debug(f"HASY latency: record_first_audio failed ({e})")
         return result
