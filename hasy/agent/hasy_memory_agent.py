@@ -60,6 +60,23 @@ class HasyMemoryAgent(BasicMemoryAgent):
         base_system = self._system
         memory_block = ""
 
+        # --- proactive turn? -------------------------------------------------
+        # The scheduler stashes its decision on the agent just before triggering,
+        # because upstream's ai-speak-signal path carries no room for a payload.
+        proactive_block = ""
+        if self._is_proactive(input_data):
+            decision = getattr(self, "_pending_proactive", None)
+            if decision is not None:
+                from ..presence.proactive import compose_proactive_block
+
+                proactive_block = compose_proactive_block(decision)
+                self._pending_proactive = None
+                if decision.thread is not None:
+                    logger.info(
+                        f"HASY presence: speaking first about '{decision.thread.topic}' "
+                        f"({decision.reason})"
+                    )
+
         # --- read path (on the latency path — measured in MemoryRetriever) ---
         if self._retriever is not None and user_text:
             try:
@@ -74,9 +91,10 @@ class HasyMemoryAgent(BasicMemoryAgent):
             except Exception as e:
                 logger.warning(f"HASY memory: read path failed ({e})")
 
-        if memory_block:
+        extras = [b for b in (memory_block, proactive_block) if b]
+        if extras:
             # Appended after the persona so retrieved facts never displace it.
-            self._system = f"{base_system}\n\n{memory_block}"
+            self._system = base_system + "\n\n" + "\n\n".join(extras)
 
         self._turn_counter += 1
         turn_id = f"turn-{self._turn_counter}"
@@ -86,7 +104,18 @@ class HasyMemoryAgent(BasicMemoryAgent):
                 yield output
         finally:
             self._system = base_system
-            self._schedule_write(user_text, turn_id)
+            # Upstream marks proactive turns skip_memory/skip_history; honour
+            # that. Storing "human said: please say something" would poison the
+            # transcript and teach HASY to talk to itself.
+            if not self._is_proactive(input_data):
+                self._schedule_write(user_text, turn_id)
+
+    @staticmethod
+    def _is_proactive(input_data: BatchInput) -> bool:
+        try:
+            return bool((input_data.metadata or {}).get("proactive_speak"))
+        except Exception:
+            return False
 
     def _schedule_write(self, user_text: str, turn_id: str) -> None:
         """Commit the turn after the response has already gone out.
