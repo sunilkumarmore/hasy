@@ -1,0 +1,27 @@
+# HASY memory configuration.
+#
+# Copy to `hasy.yaml` (git-ignored) to override. Every value below is the
+# default, so an absent hasy.yaml is a valid, working configuration.
+#
+# Kept separate from conf.yaml on purpose: conf.yaml is upstream's schema and
+# validating unknown keys against it would mean touching upstream config code.
+
+memory:
+  # false -> upstream's BasicMemoryAgent is used unchanged.
+  enabled: true
+
+  # Single SQLite file. Git-ignored; back it up if you care about it.
+  db_path: hasy_memory.db
+
+  # Ceiling on the recalled-context block injected into the system prompt.
+  # Bigger = more recall, more tokens, slower time-to-first-token.
+  token_budget: 600
+
+  # 'claude' runs a cheap model on the async write path to extract entities,
+  # facts, and threads from each turn. 'off' makes memory read-only — it will
+  # recall what is already stored but never learn anything new.
+  extraction: claude
+
+  # The extraction model. This runs once per turn off the latency path, but an
+  # always-on companion makes a lot of turns, so keep it cheap.
+  extraction_model: claude-haiku-4-5
