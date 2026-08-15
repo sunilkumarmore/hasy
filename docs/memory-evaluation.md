@@ -1,10 +1,26 @@
 # Phase 2 — Evaluation of the existing memory layer
 
-**Status: findings complete, verdict pending a decision from the human.**
-Written 2026-08-14 from reading the vendored snapshot. No code was written.
+## VERDICT: INSUFFICIENT — Phase 3 authorised (2026-08-14)
 
-The Phase 2 → 3 gate in [`CLAUDE.md`](../CLAUDE.md) still applies: do not build a
-custom memory layer until the human records a verdict of "insufficient" below.
+The human reviewed the findings below, including the assessment of Letta as the
+"don't reinvent it" alternative, and chose to build the custom memory layer.
+**The Phase 2 → 3 gate is satisfied.** Phase 3 work proceeds on the
+`hasy-memory` branch.
+
+Reasoning, in short:
+- `basic_memory_agent` is transcript replay, not memory — it cannot answer any
+  of the four evaluation questions because it has no entity, fact, or thread
+  model at all.
+- Letta is a capable memory system, but *upstream's adapter to it* is thin: a
+  no-op `handle_interrupt`, silently dropped images, and no persona plumbing.
+  Adopting it would mean repairing that adapter — i.e. upstream edits, which the
+  boundary rule in `CLAUDE.md` exists to avoid — and it regresses Phase 4 work
+  (barge-in, face tracking) before that work has started.
+- A custom layer built as an **Agent subclass** leaves the ASR/TTS/interruption/
+  vision/transport pipeline untouched, which is the cheaper architectural bet.
+
+Findings below were written from reading the vendored snapshot; no code was
+written during Phase 2.
 
 ---
 
