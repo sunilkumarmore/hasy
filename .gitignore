@@ -86,3 +86,6 @@ latency_logs/
 # HASY sqlite memory (Phase 3)
 *.db-wal
 *.db-shm
+# HASY memory (Phase 3)
+hasy_memory.db
+hasy.yaml
