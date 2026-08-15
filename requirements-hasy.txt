@@ -1,0 +1,17 @@
+# HASY-only dependencies, kept out of upstream's pyproject.toml so the
+# vendored snapshot stays untouched.
+#
+#   uv pip install -r requirements-hasy.txt
+
+# Phase 3 — memory
+sqlite-vec>=0.1.9
+
+# Phase 4 — face tracking.
+# Pinned <5 because opencv 5 requires numpy>=2, while upstream pins numpy<2.
+# Installing plain `opencv-python` will silently upgrade numpy and then a
+# `uv sync` will downgrade it again, leaving cv2 broken.
+opencv-python<5
+
+# Tests
+pytest>=8
+pytest-asyncio>=1.0

@@ -25,3 +25,43 @@ memory:
   # The extraction model. This runs once per turn off the latency path, but an
   # always-on companion makes a lot of turns, so keep it cheap.
   extraction_model: claude-haiku-4-5
+
+# ---------------------------------------------------------------------------
+# Presence (Phase 4)
+# ---------------------------------------------------------------------------
+presence:
+  proactive:
+    # HASY speaking first, driven by unresolved threads in memory.
+    enabled: true
+    tick_s: 60.0            # how often to *consider* speaking (cheap)
+    quiet_before_hour: 9    # never speak unprompted before this local hour
+    quiet_after_hour: 22    # ...or after this one
+    min_silence_s: 300.0    # wait for a real lull, not a pause mid-conversation
+    cooldown_s: 3600.0      # never more often than this
+    min_thread_age_s: 1800.0        # don't parrot back something said minutes ago
+    max_thread_age_s: 1209600.0     # 14 days: stop nagging about stale loops
+    require_thread: true    # false = may speak with nothing specific to raise
+
+  face_tracking:
+    # Turns the avatar toward whoever is in front of the LAPTOP webcam.
+    # Off by default because it opens a camera.
+    enabled: false
+    camera_index: 0
+    fps: 10.0
+
+    # CALIBRATION. The webcam and the hologram box are in different places, so
+    # these exist to be tuned physically. Use:
+    #   uv run python scripts/check_face_tracking.py --preview
+    offset_x: 0.0           # shifts the neutral point left/right
+    offset_y: 0.0
+    gain_x: 1.0             # how far the head swings
+    gain_y: 1.0
+    invert_x: false         # flip if it turns the wrong way (mirror/reflection)
+    invert_y: false
+    smoothing: 0.7          # 0 = twitchy, 0.9 = laggy
+    lost_face_timeout_s: 1.5  # drift back to neutral after losing the face
+    min_face_fraction: 0.08   # ignore faces smaller than this fraction of frame
+
+  transport:
+    # /hasy/health, /hasy/presence.js, /hasy/presence-ws
+    enabled: true

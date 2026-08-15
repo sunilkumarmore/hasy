@@ -11,6 +11,7 @@ On exit (Ctrl+C), prints the latency table and writes latency_logs/*.csv.
 
 from __future__ import annotations
 
+import atexit
 import os
 import sys
 
@@ -42,6 +43,16 @@ def main() -> None:
         install_memory()
     except Exception as e:
         logger.warning(f"HASY memory unavailable ({e}); continuing without it.")
+
+    # Presence (Phase 4): proactive speech, face tracking, /hasy routes.
+    try:
+        from hasy.presence.install import install as install_presence
+        from hasy.presence.install import shutdown as shutdown_presence
+
+        install_presence()
+        atexit.register(shutdown_presence)  # release the camera on exit
+    except Exception as e:
+        logger.warning(f"HASY presence unavailable ({e}); continuing without it.")
 
     try:
         run_server.run(console_log_level=console_log_level)
