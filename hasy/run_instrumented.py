@@ -1,7 +1,8 @@
-"""Run the upstream server with HASY latency instrumentation installed.
+"""Run the upstream server with HASY's layers installed.
 
-Equivalent to `uv run run_server.py`, plus per-turn latency timing. Upstream's
-run_server.py is imported, not modified.
+Equivalent to `uv run run_server.py`, plus per-turn latency timing (Phase 1)
+and the entity-resolved memory layer (Phase 3). Upstream's run_server.py is
+imported, not modified.
 
     uv run python -m hasy.run_instrumented [--verbose] [--hf_mirror]
 
@@ -27,9 +28,20 @@ def main() -> None:
 
     # init_logger() is called inside run(); install our patches first so they
     # are in place before any conversation can start.
-    from hasy.latency import install
+    from hasy.latency import install as install_latency
 
-    install()
+    install_latency()
+
+    # Memory patches AgentFactory, which is only consulted when a client
+    # connects — but install before the server starts so the very first
+    # conversation gets it too. Independent of the latency patches: they hook
+    # the conversation/LLM/TTS path, this hooks agent construction.
+    try:
+        from hasy.memory.install import install as install_memory
+
+        install_memory()
+    except Exception as e:
+        logger.warning(f"HASY memory unavailable ({e}); continuing without it.")
 
     try:
         run_server.run(console_log_level=console_log_level)
